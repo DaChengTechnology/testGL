@@ -248,8 +248,28 @@ bool initGL(void) {
             positionOut[i * 2 + 1] = fmaf(sinf(rate + i), r + width, center[1]);
         }
         /// 计算圆环轮廓渐变
-        float distent = sqrtf(fmaf(positionOut[0] - positionOut[180], positionOut[0] - positionOut[180], 0) + fmaf(positionOut[1] - positionOut[181], positionOut[1] - positionOut[181], 0));
-
+        /// 计算距离
+        float x3 = positionOut[0];
+        float y3 = positionOut[1];
+        float x4 = positionOut[360];
+        float y4 = positionOut[361];
+        float distent = sqrtf(fmaf(x3 - x4, x3 - x4, 0) + fmaf(y3 - y4, y3 - y4, 0));
+        float x1 = positionOut[180];
+        float x2 = positionOut[540];
+        float y1 = positionOut[181];
+        float y2 = positionOut[541];
+        float r = endColor[0] - beginColor[0];
+        float g = endColor[1] - beginColor[1];
+        float b = endColor[2] - beginColor[2];
+        color[0] = beginColor[0];
+        color[1] = beginColor[1];
+        color[2] = beginColor[2];
+        for (int i = 1; i < 180; ++i) {
+            color[(360-i)*3]
+        }
+        color[3 * 180] = endColor[0];
+        color[3 * 180 + 1] = endColor[1];
+        color[3 * 180 + 2] = endColor[2];
     }
     else
     {
