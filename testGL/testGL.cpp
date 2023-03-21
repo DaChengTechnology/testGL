@@ -3,9 +3,10 @@
 
 #include "framework.h"
 #include "testGL.h"
+#include <glad/glad.h>
 #include <gl/GL.h>
-#include <gl/GLU.h>
 #include <string>
+#include <functional>
 
 #define MAX_LOADSTRING 100
 
@@ -20,7 +21,7 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 // 初始化GL
-bool initGL(void);
+bool initGL(HWND hwd);
 //  绘制函数
 void draw(HWND hwd);
 /// <summary>
@@ -28,13 +29,16 @@ void draw(HWND hwd);
 /// </summary>
 float positionIn[720];
 /// <summary>
-/// 圆环外径坐标vec3
+/// 圆环外径坐标vec2
 /// </summary>
 float positionOut[720];
 /// <summary>
 /// 圆环颜色描述
 /// </summary>
 float color[1080];
+float* highlightB;
+unsigned int buff;
+unsigned int program[3];
 /// 可更改参数
 /// <summary>
 /// 圆心
@@ -68,6 +72,21 @@ const float endColor[3] = { 0.9f,0.9f,0.9f };
 /// 渐变开始角度 0度为正向x轴方向
 /// </summary>
 const float rate = 270.0f;
+
+void* GetAnyGLFuncAddress(const char* name)
+{
+    void* p = (void*)wglGetProcAddress(name);
+    if (p == 0 ||
+        (p == (void*)0x1) || (p == (void*)0x2) || (p == (void*)0x3) ||
+        (p == (void*)-1))
+    {
+        HMODULE module = LoadLibraryA("opengl32.dll");
+        p = (void*)GetProcAddress(module, name);
+    }
+
+    return p;
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
@@ -82,9 +101,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_TESTGL, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
-    if (!initGL()) {
-        return -1;
-    }
 
     // 执行应用程序初始化:
     if (!InitInstance (hInstance, nCmdShow))
@@ -159,6 +175,10 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
+   if (!initGL(hWnd)) {
+       return FALSE;
+   }
+
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
 
@@ -191,9 +211,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             case IDM_EXIT:
                 DestroyWindow(hWnd);
                 break;
-            case WM_PAINT:
-                draw(hWnd);
-                break;
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
             }
@@ -201,14 +218,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_PAINT:
         {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hWnd, &ps);
-            // TODO: 在此处添加使用 hdc 的任何绘图代码...
-            EndPaint(hWnd, &ps);
+        draw(hWnd);
         }
         break;
     case WM_DESTROY:
+    {
         PostQuitMessage(0);
+        glDeleteBuffers(1, &buff);
+        HDC h = wglGetCurrentDC();
+        HGLRC hrc = wglGetCurrentContext();
+        wglMakeCurrent(h, hrc);
+        if (hrc) {
+            wglDeleteContext(hrc);
+        }
+        if (h) {
+            ReleaseDC(hWnd, h);
+        }
+    }
         break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
@@ -236,10 +262,33 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     return (INT_PTR)FALSE;
 }
 
-bool initGL(void) {
-    const GLubyte* version = glGetString(GL_VERSION);
-    // 如果version为NULL 则是Windows自带的OpenGL
-    if(version==NULL){
+bool initGL(HWND hwd) {
+    HDC hdc = GetDC(hwd);
+    PIXELFORMATDESCRIPTOR pfd = {
+        sizeof(PIXELFORMATDESCRIPTOR),    // size of this pfd  
+        1,                                // version number  
+        PFD_DRAW_TO_WINDOW |              // support window  
+        PFD_SUPPORT_OPENGL |              // support OpenGL  
+        PFD_DOUBLEBUFFER,                 // double buffered  
+        PFD_TYPE_RGBA,                    // RGBA type  
+        24,                               // 24-bit color depth  
+        0, 0, 0, 0, 0, 0,                 // color bits ignored  
+        0,                                // no alpha buffer  
+        0,                                // shift bit ignored  
+        0,                                // no accumulation buffer  
+        0, 0, 0, 0,                       // accum bits ignored  
+        32,                               // 32-bit z-buffer      
+        0,                                // no stencil buffer  
+        0,                                // no auxiliary buffer  
+        PFD_MAIN_PLANE,                   // main layer  
+        0,                                // reserved  
+        0, 0, 0                           // layer masks ignored  
+    };
+    int iPixelFormat = ChoosePixelFormat(hdc, &pfd);
+    SetPixelFormat(hdc, iPixelFormat, &pfd);
+    HGLRC hglrc = wglCreateContext(hdc);
+    wglMakeCurrent(hdc, hglrc);
+    /*if (version == NULL) {
         /// 计算圆环轮廓 可以加OMP
         for (int i = 0; i < 360; ++i) {
             positionIn[i * 2] = fmaf(cosf(rate + i), r, center[0]);
@@ -248,32 +297,92 @@ bool initGL(void) {
             positionOut[i * 2 + 1] = fmaf(sinf(rate + i), r + width, center[1]);
         }
         /// 计算圆环轮廓渐变
-        /// 计算距离
-        float x3 = positionOut[0];
-        float y3 = positionOut[1];
-        float x4 = positionOut[360];
-        float y4 = positionOut[361];
-        float distent = sqrtf(fmaf(x3 - x4, x3 - x4, 0) + fmaf(y3 - y4, y3 - y4, 0));
-        float x1 = positionOut[180];
-        float x2 = positionOut[540];
-        float y1 = positionOut[181];
-        float y2 = positionOut[541];
-        float r = endColor[0] - beginColor[0];
-        float g = endColor[1] - beginColor[1];
-        float b = endColor[2] - beginColor[2];
+        float r = (endColor[0] - beginColor[0])/180;
+        float g = (endColor[1] - beginColor[1])/180;
+        float b = (endColor[2] - beginColor[2])/180;
         color[0] = beginColor[0];
         color[1] = beginColor[1];
         color[2] = beginColor[2];
         for (int i = 1; i < 180; ++i) {
-            color[(360-i)*3]
+            color[i * 3] = beginColor[0] + r * i;
+            color[i * 3 + 1] = beginColor[1] + g * i;
+            color[i * 3 + 2] = beginColor[2] + b * i;
+            color[(360 - i) * 3] = beginColor[0] + r * i;
+            color[(360 - i) * 3 + 1] = beginColor[1] + g * i;
+            color[(360 - i) * 3 + 2] = beginColor[2] + b * i;
         }
         color[3 * 180] = endColor[0];
         color[3 * 180 + 1] = endColor[1];
         color[3 * 180 + 2] = endColor[2];
+        /// 计算白色圆弧
+        float ratef = lenth * 180 / r / 3.1415926;
+        int rateI = (int)ratef;
+        float rateB = rate - rateI / 2;
+        highlightB = new float[rateI * 2 + 2];
+        highlightB[0] = center[0];
+        highlightB[1] = center[1];
+        for (int i = 0; i < rateI; ++i) {
+            highlightB[(i + 1) * 2] = fmaf(cosf(rateB + i), r + 0.05, center[0]);
+            highlightB[(i + 1) * 2 + 1] = fmaf(sinf(rateB + i), r + 0.05, center[1]);
+        }
+        /*void* f = GetAnyGLFuncAddress("glGenBuffers");
+        ((void(*)(GLsizei, GLuint*))(f))(5, buff);
     }
     else
     {
         // OpenGL 4.3+ glDispatchCompute
+    }*/
+    /// 计算圆环轮廓 可以加OMP
+    for (int i = 0; i < 360; ++i) {
+        positionIn[i * 2] = fmaf(cosf(rate + i), r, center[0]);
+        positionIn[i * 2 + 1] = fmaf(sinf(rate + i), r, center[1]);
+        positionOut[i * 2] = fmaf(cosf(rate + i), r + width, center[0]);
+        positionOut[i * 2 + 1] = fmaf(sinf(rate + i), r + width, center[1]);
+    }
+    /// 计算圆环轮廓渐变
+    float r = (endColor[0] - beginColor[0]) / 180;
+    float g = (endColor[1] - beginColor[1]) / 180;
+    float b = (endColor[2] - beginColor[2]) / 180;
+    color[0] = beginColor[0];
+    color[1] = beginColor[1];
+    color[2] = beginColor[2];
+    for (int i = 1; i < 180; ++i) {
+        color[i * 3] = beginColor[0] + r * i;
+        color[i * 3 + 1] = beginColor[1] + g * i;
+        color[i * 3 + 2] = beginColor[2] + b * i;
+        color[(360 - i) * 3] = beginColor[0] + r * i;
+        color[(360 - i) * 3 + 1] = beginColor[1] + g * i;
+        color[(360 - i) * 3 + 2] = beginColor[2] + b * i;
+    }
+    color[3 * 180] = endColor[0];
+    color[3 * 180 + 1] = endColor[1];
+    color[3 * 180 + 2] = endColor[2];
+    /// 计算白色圆弧
+    float ratef = lenth * 180 / r / 3.1415926;
+    int rateI = (int)ratef;
+    float rateB = rate - rateI / 2;
+    highlightB = new float[rateI * 2 + 2];
+    unsigned int hbLenth = rateI * 2 + 2;
+    highlightB[0] = center[0];
+    highlightB[1] = center[1];
+    for (int i = 0; i < rateI; ++i) {
+        highlightB[(i + 1) * 2] = fmaf(cosf(rateB + i), r + 0.05, center[0]);
+        highlightB[(i + 1) * 2 + 1] = fmaf(sinf(rateB + i), r + 0.05, center[1]);
+    }
+    glGenBuffers(1, &buff);
+    glBindBuffer(GL_ARRAY_BUFFER, buff);
+    glBufferData(GL_ARRAY_BUFFER, hbLenth * sizeof(float), highlightB, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), NULL);
+    program[0] = glCreateProgram();
+    const char* hlVSs = "attribute vec4 position;\nvoid main()\n{\ngl_Position = position;\n}\n";
+    unsigned int hlVS = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(hlVS, 1, &hlVSs, nullptr);
+    glCompileShader(hlVS);
+    int res;
+    glGetShaderiv(hlVS, GL_COMPILE_STATUS, &res);
+    if (res == GL_FALSE) {
+        return false;
     }
     return true;
 }
